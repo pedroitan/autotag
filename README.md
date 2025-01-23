@@ -1,7 +1,11 @@
 
 # ImageTagMan
 
-ImageTagMan is a Python-based tool for automatically tagging images using the OpenAI Vision API. It processes images in a specified directory, retrieves existing tags, and sets new tags if none exist.
+ImageTagMan is a Python-based tool for automatically tagging images in MacOS using the OpenAI Vision API. It processes images in a specified directory, retrieves existing tags, and sets new tags if none exist.
+
+This defaults to using gpt-4o-mini which, according to their pricing,is $0.15/Million tokens and using the low-quality vision API uses 85 tokens per image. So you should be able to get 11,764 images per $0.15 (78,348 per $1)
+
+You will need an OpenAI API key to use imgtagman.
 
 ## Features
 
@@ -29,6 +33,11 @@ ImageTagMan is a Python-based tool for automatically tagging images using the Op
 3. Set the necessary environment variables:
 
     - `OPENAI_API_KEY`: Your OpenAI API key
+    ```bash
+    export OPENAI_API_KEY=\{key from openai\}
+    ```
+
+    ----OPTIONAL----
     - `IMAGE_DIRECTORY`: Path to the directory containing images (default: current directory)
     - `DETAIL_LEVEL`: Level of detail for tags (`low` or `high`, default: `low`)
 
