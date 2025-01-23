@@ -1,0 +1,15 @@
+README.md
+imgtagman.py
+pyproject.toml
+setup.py
+imgtagman/__init__.py
+imgtagman/imgtag.py
+imgtagman/imgtagman.py
+imgtagman/remove_tags.py
+imgtagman/tag_summary.py
+imgtagman.egg-info/PKG-INFO
+imgtagman.egg-info/SOURCES.txt
+imgtagman.egg-info/dependency_links.txt
+imgtagman.egg-info/entry_points.txt
+imgtagman.egg-info/requires.txt
+imgtagman.egg-info/top_level.txt

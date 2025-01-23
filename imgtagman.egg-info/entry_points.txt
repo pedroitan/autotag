@@ -1,0 +1,2 @@
+[console_scripts]
+imgtagman = imgtagman.imgtagman:main
