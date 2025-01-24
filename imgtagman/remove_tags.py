@@ -36,7 +36,7 @@ def remove_tags_from_images(directory_path):
     image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp"}
     dir_path = Path(directory)
 
-    with ThreadPoolExecutor(max_workers=25) as executor:
+    with ThreadPoolExecutor(max_workers=50) as executor:
         futures = [
             executor.submit(process_file, file_path)
             for file_path in dir_path.glob("*")

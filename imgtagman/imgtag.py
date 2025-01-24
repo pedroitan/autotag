@@ -70,6 +70,8 @@ def get_tags_from_openai(image_path, detail_level="low"):
             base64_image = base64.b64encode(image_file.read()).decode("utf-8")
 
         # Prepare the prompt based on detail level
+        # This prompt is designed to get basic tags for images, we don't need
+        # detailed vision analysis as we just want basic tags
         prompt = (
             "Provide at most ten tags for this image preferring single word tags where possible. "
             "If the image is complex, you can provide more detailed tags."
@@ -91,7 +93,7 @@ def get_tags_from_openai(image_path, detail_level="low"):
                             "type": "image_url",
                             "image_url": {
                                 "url": f"data:image/jpeg;base64,{base64_image}",
-                                "detail": "low",
+                                "detail": f"{detail_level}",
                             },
                         },
                     ],
@@ -148,6 +150,10 @@ def process_images(directory_path, detail_level="low"):
     # Convert directory path to Path object
     dir_path = Path(directory_path)
 
+    # Process each image file using multi-threading
+    # be careful setting max_workers too high, as it may cause throttling
+    # issues with the OpenAI API. I recommend starting with 10 workers and
+    # keeping it below 20 to avoid issues.
     with ThreadPoolExecutor(max_workers=10) as executor:
         futures = [
             executor.submit(process_file, file_path, detail_level)

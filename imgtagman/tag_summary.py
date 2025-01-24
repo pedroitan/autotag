@@ -23,7 +23,7 @@ def summarize_tags(directory_path):
                 tag_to_files[tag].append(str(file_path))
 
     # Iterate through all files in the directory using multi-threading
-    with ThreadPoolExecutor(max_workers=25) as executor:
+    with ThreadPoolExecutor(max_workers=50) as executor:
         futures = [
             executor.submit(process_file, file_path)
             for file_path in dir_path.glob("*")
