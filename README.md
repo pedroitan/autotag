@@ -3,7 +3,7 @@
 
 ImageTagMan is a Python-based tool for automatically tagging images in MacOS using the OpenAI Vision API. It processes images in a specified directory, retrieves existing tags, and sets new tags if none exist.
 
-This defaults to using gpt-4o-mini which, according to their pricing,is $0.15/Million tokens and using the low-quality vision API uses 85 tokens per image. So you should be able to get 11,764 images per $0.15 (78,348 per $1)
+This defaults to using gpt-4o-mini which, according to their pricing,is $0.15/Million tokens and using the low-quality vision API uses 85 tokens per image return. You still pay for upload tokens so doing several thousand images is a like $5.
 
 You will need an OpenAI API key to use imgtagman.
 

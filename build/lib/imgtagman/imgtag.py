@@ -72,6 +72,9 @@ def get_tags_from_openai(image_path, detail_level="low"):
         # Prepare the prompt based on detail level
         prompt = (
             "Provide at most ten tags for this image preferring single word tags where possible. "
+            "If the image is complex, you can provide more detailed tags."
+            "If the image contains text, you can include the simplified text (max three words) content as tags. "
+            "When simplifying text in images, prefer the main content and ignore any decorative text. "
             f"Use {detail_level} level of detail. "
             "Respond with only the tags as a JSON array of strings."
         )
