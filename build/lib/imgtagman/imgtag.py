@@ -73,12 +73,12 @@ def get_tags_from_openai(image_path, detail_level="low"):
         # This prompt is designed to get basic tags for images, we don't need
         # detailed vision analysis as we just want basic tags
         prompt = (
-            "Provide at most ten tags for this image preferring single word tags where possible. "
-            "If the image is complex, you can provide more detailed tags."
-            "If the image contains text, you can include the simplified text (max three words) content as tags. "
-            "When simplifying text in images, prefer the main content and ignore any decorative text. "
-            f"Use {detail_level} level of detail. "
-            "Respond with only the tags as a JSON array of strings."
+            "Forneça no máximo dez tags em português para esta imagem, preferindo tags de uma única palavra quando possível. "
+            "Se a imagem for complexa, você pode fornecer tags mais detalhadas. "
+            "Se a imagem contiver texto, você pode incluir o conteúdo do texto simplificado (máximo três palavras) como tags. "
+            "Ao simplificar texto nas imagens, prefira o conteúdo principal e ignore qualquer texto decorativo. "
+            f"Use nível de detalhe {detail_level}. "
+            "Responda apenas com as tags como um array JSON de strings."
         )
 
         # Make API request

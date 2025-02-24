@@ -2,17 +2,38 @@ import os
 import base64
 import subprocess
 import json
+import logging
 from pathlib import Path
 from openai import OpenAI
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dotenv import load_dotenv
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+
+# Load environment variables from frontend/.env
+frontend_env_path = Path(__file__).parent.parent / 'frontend' / '.env'
+if not frontend_env_path.exists():
+    logging.error(f".env file not found at {frontend_env_path}")
+    raise FileNotFoundError(f".env file not found at {frontend_env_path}")
+
+load_dotenv(frontend_env_path)
 
 # Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    logging.error("OPENAI_API_KEY environment variable not found")
+    raise ValueError("OPENAI_API_KEY environment variable not found")
 
+client = OpenAI(api_key=api_key)
 
 def get_file_tags(file_path):
     """Get existing tags from a file using mdls"""
     try:
+        logging.info(f"Getting existing tags for: {file_path}")
         # Run mdls command to get tags
         result = subprocess.run(
             ["mdls", "-name", "kMDItemUserTags", str(file_path)],
@@ -23,29 +44,34 @@ def get_file_tags(file_path):
         # Parse the output
         output = result.stdout.strip()
         if "null" in output or "(" not in output:
+            logging.info(f"No existing tags found for: {file_path}")
             return []
 
         # Extract tags from the output
         tags = output.split("kMDItemUserTags = (")[-1].strip(")\n").strip()
-        return [tag.strip(' "') for tag in tags.split(",") if tag.strip()]
+        tags_list = [tag.strip(' "') for tag in tags.split(",") if tag.strip()]
+        logging.info(f"Found existing tags for {file_path}: {tags_list}")
+        return tags_list
     except Exception as e:
-        print(f"Error getting tags for {file_path}: {e}")
+        logging.error(f"Error getting tags for {file_path}: {e}")
         return []
 
 
 def set_file_tags(file_path, tags):
     """Set tags for a file using xattr"""
     try:
+        logging.info(f"Setting tags for {file_path}: {tags}")
+        
         # Convert tags list to XML plist string
         tags_xml = "\n".join([f"\t\t<string>{tag}</string>" for tag in tags])
-        tags_str = f"""<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        tags_str = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-\t<array>
+<array>
 {tags_xml}
-\t</array>
-</plist>
-"""
-
+</array>
+</plist>"""
+        
         # Use xattr to set tags
         subprocess.run(
             [
@@ -57,30 +83,31 @@ def set_file_tags(file_path, tags):
             ],
             check=True,
         )
-        print(f"Successfully set tags for {file_path}: {tags}")
+        logging.info(f"Successfully set tags for: {file_path}")
     except Exception as e:
-        print(f"Error setting tags for {file_path}: {e}")
+        logging.error(f"Error setting tags for {file_path}: {e}")
+        raise
 
 
 def get_tags_from_openai(image_path, detail_level="low"):
     """Get tags from OpenAI Vision API"""
     try:
+        logging.info(f"Getting tags from OpenAI for: {image_path}")
         # Read and encode image
         with open(image_path, "rb") as image_file:
             base64_image = base64.b64encode(image_file.read()).decode("utf-8")
 
         # Prepare the prompt based on detail level
-        # This prompt is designed to get basic tags for images, we don't need
-        # detailed vision analysis as we just want basic tags
         prompt = (
-            "Provide at most ten tags for this image preferring single word tags where possible. "
-            "If the image is complex, you can provide more detailed tags."
-            "If the image contains text, you can include the simplified text (max three words) content as tags. "
-            "When simplifying text in images, prefer the main content and ignore any decorative text. "
-            f"Use {detail_level} level of detail. "
-            "Respond with only the tags as a JSON array of strings."
+            "Forneça no máximo dez tags em português para esta imagem, preferindo tags de uma única palavra quando possível. "
+            "Se a imagem for complexa, você pode fornecer tags mais detalhadas. "
+            "Se a imagem contiver texto, você pode incluir o conteúdo do texto simplificado (máximo três palavras) como tags. "
+            "Ao simplificar texto nas imagens, prefira o conteúdo principal e ignore qualquer texto decorativo. "
+            f"Use nível de detalhe {detail_level}. "
+            "Responda apenas com as tags como um array JSON de strings."
         )
 
+        logging.info("Making API request to OpenAI...")
         # Make API request
         response = client.chat.completions.create(
             model="gpt-4o-mini",
@@ -93,7 +120,7 @@ def get_tags_from_openai(image_path, detail_level="low"):
                             "type": "image_url",
                             "image_url": {
                                 "url": f"data:image/jpeg;base64,{base64_image}",
-                                "detail": f"{detail_level}",
+                                "detail": "low" if detail_level == "low" else "high"
                             },
                         },
                     ],
@@ -102,85 +129,111 @@ def get_tags_from_openai(image_path, detail_level="low"):
             max_tokens=300,
         )
 
-        # Parse response and extract tags
+        # Parse response
         try:
-            tags_text = response.choices[0].message.content
-            # Remove Markdown code block syntax if present
-            if tags_text.startswith("```json") and tags_text.endswith("```"):
-                tags_text = tags_text.replace("```json", "").replace("```", "").strip()
-            # Try to parse as JSON first
-            try:
-                tags = json.loads(tags_text)
-            except json.JSONDecodeError:
-                # If not valid JSON, split by commas and clean up
-                tags = [tag.strip(' "[]').lower() for tag in tags_text.split(",")]
-
-            return tags if isinstance(tags, list) else []
+            content = response.choices[0].message.content
+            logging.info(f"OpenAI response: {content}")
+            
+            # Remove markdown code block if present
+            if content.startswith("```"):
+                content = content.split("\n", 1)[1]  # Remove first line with ```json
+                content = content.rsplit("\n", 1)[0]  # Remove last line with ```
+            
+            tags = json.loads(content)
+            logging.info(f"Parsed tags: {tags}")
+            return tags
+        except json.JSONDecodeError as e:
+            logging.error(f"Failed to parse OpenAI response as JSON: {content}")
+            logging.error(f"JSON parse error: {e}")
+            return []
         except Exception as e:
-            print(f"Error parsing OpenAI response: {e}")
+            logging.error(f"Error processing OpenAI response: {e}")
             return []
 
     except Exception as e:
-        print(f"Error getting tags from OpenAI for {image_path}: {e}")
+        logging.error(f"Error getting tags from OpenAI for {image_path}: {e}")
         return []
 
 
-def process_file(file_path, detail_level):
+def process_file(file_path, detail_level="low"):
     """Process a single file: get tags and set new tags if none exist."""
-    # print(f"\nProcessing: {file_path}")
-    existing_tags = get_file_tags(file_path)
-
-    if not existing_tags:
-        print("No existing tags found, getting tags from OpenAI...")
-        new_tags = get_tags_from_openai(file_path, detail_level)
-
-        if new_tags:
-            set_file_tags(file_path, new_tags)
+    try:
+        logging.info(f"Processing file: {file_path}")
+        existing_tags = get_file_tags(file_path)
+        
+        if not existing_tags:
+            logging.info(f"No existing tags found for {file_path}, getting new tags from OpenAI")
+            new_tags = get_tags_from_openai(file_path, detail_level)
+            if new_tags:
+                logging.info(f"Setting new tags for {file_path}: {new_tags}")
+                set_file_tags(file_path, new_tags)
+            else:
+                logging.warning(f"No tags were generated for {file_path}")
         else:
-            print("Failed to get tags from OpenAI")
-    else:
-        print(f"File already has tags: {existing_tags}")
+            logging.info(f"File {file_path} already has tags: {existing_tags}")
+    except Exception as e:
+        logging.error(f"Error processing file {file_path}: {e}")
+        raise
 
 
 def process_images(directory_path, detail_level="low"):
     """Process all images in a directory."""
-    # Define image extensions to process
-    image_extensions = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp"}
+    try:
+        directory = Path(directory_path)
+        if not directory.exists():
+            logging.error(f"Directory does not exist: {directory_path}")
+            raise FileNotFoundError(f"Directory does not exist: {directory_path}")
 
-    # Convert directory path to Path object
-    dir_path = Path(directory_path)
+        logging.info(f"Processing directory: {directory_path}")
+        image_files = []
+        for ext in [".jpg", ".jpeg", ".png", ".gif", ".webp"]:
+            image_files.extend(directory.glob(f"*{ext}"))
+            image_files.extend(directory.glob(f"*{ext.upper()}"))
 
-    # Process each image file using multi-threading
-    # be careful setting max_workers too high, as it may cause throttling
-    # issues with the OpenAI API. I recommend starting with 10 workers and
-    # keeping it below 20 to avoid issues.
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [
-            executor.submit(process_file, file_path, detail_level)
-            for file_path in dir_path.glob("*")
-            if file_path.suffix.lower() in image_extensions
-        ]
+        if not image_files:
+            logging.warning(f"No image files found in directory: {directory_path}")
+            return
 
-        for future in as_completed(futures):
-            try:
-                future.result()
-            except Exception as e:
-                print(f"Error processing file: {e}")
+        logging.info(f"Found {len(image_files)} image files")
+        
+        with ThreadPoolExecutor() as executor:
+            futures = {
+                executor.submit(process_file, str(image_path), detail_level): image_path
+                for image_path in image_files
+            }
+            
+            for future in as_completed(futures):
+                image_path = futures[future]
+                try:
+                    future.result()
+                    logging.info(f"Successfully processed {image_path}")
+                except Exception as e:
+                    logging.error(f"Failed to process {image_path}: {e}")
+
+    except Exception as e:
+        logging.error(f"Error processing directory {directory_path}: {e}")
+        raise
 
 
 def main():
-    # Get directory path and detail level from environment variables or use defaults
-    directory = os.getenv("IMAGE_DIRECTORY", ".")
-    detail_level = os.getenv("DETAIL_LEVEL", "low")
+    """Main function to process command line arguments and start processing."""
+    try:
+        import sys
+        if len(sys.argv) < 2:
+            logging.error("No directory path provided")
+            print("Usage: python imgtag.py <directory_path> [detail_level]")
+            sys.exit(1)
 
-    if detail_level not in ["low", "high"]:
-        print("Invalid detail level. Using 'low' as default.")
-        detail_level = "low"
-
-    print(f"Processing directory: {directory}")
-    print(f"Detail level: {detail_level}")
-
-    process_images(directory, detail_level)
+        directory_path = sys.argv[1]
+        detail_level = sys.argv[2] if len(sys.argv) > 2 else "low"
+        
+        logging.info(f"Starting image processing with directory: {directory_path}, detail_level: {detail_level}")
+        process_images(directory_path, detail_level)
+        logging.info("Processing completed successfully")
+        
+    except Exception as e:
+        logging.error(f"Error in main: {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
