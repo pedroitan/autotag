@@ -1,8 +1,13 @@
 {
-  "name": "frontend",
-  "version": "0.1.0",
+  "name": "autotag-drive",
+  "version": "1.0.0",
   "private": true,
-  "main": "electron/main.js",
+  "main": "public/electron.js",
+  "homepage": "./",
+  "author": {
+    "name": "AutoTag Drive Team"
+  },
+  "description": "Automatic image tagging application",
   "dependencies": {
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.0",
@@ -15,6 +20,8 @@
     "@testing-library/user-event": "^13.5.0",
     "axios": "^1.7.9",
     "dotenv": "^16.4.7",
+    "electron-store": "^10.0.1",
+    "fs-extra": "^11.3.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-dropzone": "^14.3.6",
@@ -23,16 +30,15 @@
     "web-vitals": "^2.1.4"
   },
   "scripts": {
+    "postinstall": "cd ../imgtagman && pip install -r requirements.txt -t python_modules --system",
+    "prebuild": "node scripts/install-deps.js",
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "postbuild": "cp public/electron.js build/ && cp public/preload.js build/ && node scripts/copy-backend.js",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "electron-dev": "ELECTRON_START_URL=http://localhost:3000 electron .",
-    "electron": "electron .",
-    "pack": "electron-builder --dir",
-    "dist": "electron-builder",
     "electron:dev": "concurrently \"BROWSER=none npm start\" \"wait-on http://localhost:3000 && electron .\"",
-    "electron:build": "npm run build && electron-builder",
+    "electron:build:mac": "npm run build && electron-builder --mac",
     "electron:start": "electron ."
   },
   "devDependencies": {
@@ -42,16 +48,35 @@
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.imgtagman.app",
+    "appId": "com.autotag.drive",
+    "productName": "AutoTag Drive",
     "mac": {
       "category": "public.app-category.utilities"
     },
     "files": [
-      "build/**/*",
-      "electron/**/*"
+      "build/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../imgtagman",
+        "to": "imgtagman",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "../imgtagman/python_modules",
+        "to": "python_modules",
+        "filter": [
+          "**/*"
+        ]
+      }
     ],
     "directories": {
-      "buildResources": "assets"
+      "buildResources": "public",
+      "output": "dist"
     }
   },
   "eslintConfig": {

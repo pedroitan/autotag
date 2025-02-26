@@ -26,8 +26,8 @@ const Layout = ({ children }) => {
           onChange={handleTabChange}
           sx={{ bgcolor: 'primary.dark' }}
         >
-          <Tab icon={<HomeIcon />} label="Dashboard" />
-          <Tab icon={<CollectionsIcon />} label="Gallery" />
+          <Tab icon={<HomeIcon />} label="Painel" />
+          <Tab icon={<CollectionsIcon />} label="Galeria" />
         </Tabs>
       </AppBar>
       

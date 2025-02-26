@@ -1,21 +1,74 @@
 const { app, BrowserWindow, ipcMain, dialog, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { exec } = require('child_process');
-const isDev = process.env.NODE_ENV === 'development';
+const { spawn } = require('child_process');
+const isDev = require('electron-is-dev');
 const { shell } = require('electron'); // Added necessary import
+const Store = require('electron-store');
+const store = new Store();
 
 // Define supported image extensions
 const IMAGE_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp'];
 
 let mainWindow;
 
+// Get the correct path for resources
+function getResourcePath() {
+  if (isDev) {
+    return path.join(__dirname, '../../');
+  }
+  
+  if (process.platform === 'darwin') {
+    return path.join(process.resourcesPath);
+  }
+  
+  return path.join(process.resourcesPath);
+}
+
+// Set up Python environment
+function setupPythonEnv() {
+  const resourcePath = getResourcePath();
+  const pythonModulesPath = path.join(resourcePath, 'imgtagman', 'python_modules');
+  const imgtagmanPath = path.join(resourcePath, 'imgtagman');
+  
+  // Add both paths to PYTHONPATH, ensure python_modules comes first
+  process.env.PYTHONPATH = [
+    pythonModulesPath,
+    imgtagmanPath
+  ].filter(Boolean).join(':');
+  
+  // Set OpenAI API key
+  // Load from .env file if available
+  try {
+    const dotenv = require('dotenv');
+    const envPath = path.resolve(__dirname, '../.env');
+    if (fs.existsSync(envPath)) {
+      const envConfig = dotenv.config({ path: envPath });
+      if (envConfig.parsed && envConfig.parsed.OPENAI_API_KEY) {
+        process.env.OPENAI_API_KEY = envConfig.parsed.OPENAI_API_KEY;
+      }
+    }
+  } catch (error) {
+    console.error('Error loading .env file:', error);
+  }
+  
+  console.log('Python environment:', {
+    PYTHONPATH: process.env.PYTHONPATH,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY ? 'set' : 'not set',
+    resourcePath,
+    pythonModulesPath,
+    imgtagmanPath
+  });
+}
+
 function createWindow() {
+  setupPythonEnv();
+  
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     webPreferences: {
-      nodeIntegration: false,
+      nodeIntegration: true,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
       webSecurity: true
@@ -80,9 +133,9 @@ ipcMain.handle('dialog:getApiKey', async () => {
       type: 'question',
       buttons: ['OK'],
       defaultId: 0,
-      title: 'OpenAI API Key Required',
-      message: 'Please enter your OpenAI API Key:',
-      detail: 'The API key will be used only for this session and will not be stored.',
+      title: 'Chave da API OpenAI Necessária',
+      message: 'Por favor, insira sua chave da API OpenAI:',
+      detail: 'A chave da API será usada apenas para esta sessão e não será armazenada.',
       inputField: {
         type: 'password',
         required: true
@@ -96,121 +149,45 @@ ipcMain.handle('dialog:getApiKey', async () => {
   }
 });
 
-// Function to get image tags using xattr
-function getImageTags(filePath) {
-  return new Promise((resolve, reject) => {
-    console.log(`[DEBUG] Reading tags for: ${filePath}`);
-    exec(`xattr -px com.apple.metadata:_kMDItemUserTags "${filePath}"`, (error, stdout, stderr) => {
-      if (error) {
-        console.log(`[DEBUG] No xattr tags found, trying alternative methods...`);
-        exec(`mdls -raw -name kMDItemUserTags "${filePath}"`, (mdlsError, mdlsStdout, mdlsStderr) => {
-          if (mdlsError || mdlsStdout.trim() === '(null)') {
-            console.log(`[DEBUG] No tags found for ${filePath}`);
-            return resolve([]);
-          }
-          try {
-            const tags = mdlsStdout.trim().slice(1, -1).split(',').map(t => t.trim().replace(/^"|"$/g, ''));
-            console.log(`[DEBUG] MDLS tags for ${filePath}:`, tags);
-            resolve(tags);
-          } catch (e) {
-            console.error(`[DEBUG] Error parsing MDLS tags:`, e);
-            resolve([]);
-          }
-        });
-        return;
-      }
-
-      try {
-        // Parse hex output to XML
-        const hex = stdout.replace(/\s/g, '');
-        const buffer = Buffer.from(hex, 'hex');
-        const xmlString = buffer.toString('utf8');
-        const tags = [...xmlString.matchAll(/<string>(.*?)<\/string>/g)].map(m => m[1]);
-        console.log(`[DEBUG] XATTR tags for ${filePath}:`, tags);
-        resolve(tags);
-      } catch (e) {
-        console.error(`[DEBUG] Error parsing XATTR tags:`, e);
-        resolve([]);
-      }
-    });
-  });
-}
-
 // Handle getting images from directory
 ipcMain.handle('directory:getImages', async (event, directoryPath) => {
   try {
-    console.log('[DEBUG] Main: Getting images from directory:', directoryPath);
-    const files = fs.readdirSync(directoryPath);
+    const files = await fs.promises.readdir(directoryPath);
     const imageFiles = files.filter(file => {
       const ext = path.extname(file).toLowerCase();
-      return IMAGE_EXTENSIONS.includes(ext);
+      return ['.jpg', '.jpeg', '.png', '.gif'].includes(ext);
     });
-    console.log('[DEBUG] Main: Found image files:', imageFiles);
 
-    const imagePromises = imageFiles.map(async file => {
+    const images = await Promise.all(imageFiles.map(async (file) => {
       const filePath = path.join(directoryPath, file);
+      const stats = await fs.promises.stat(filePath);
+      
+      // Get tags for the image
+      let tags = [];
       try {
-        // Get tags from xattr XML output
-        const tags = await new Promise((resolve) => {
-          exec(`xattr -l "${filePath}"`, (error, stdout, stderr) => {
-            if (error || stderr) {
-              console.log(`[DEBUG] Main: No tags found for ${file}, error:`, error || stderr);
-              resolve([]);
-            } else {
-              try {
-                console.log(`[DEBUG] Main: Raw xattr output for ${file}:`, stdout);
-                // Find the user tags section
-                const tagsMatch = stdout.match(/com\.apple\.metadata:_kMDItemUserTags:[\s\S]*?<array>([\s\S]*?)<\/array>/);
-                if (!tagsMatch) {
-                  console.log(`[DEBUG] Main: No tags section found for ${file} in output:`, stdout);
-                  resolve([]);
-                  return;
-                }
-
-                // Extract tags from XML
-                const tagsXml = tagsMatch[1];
-                console.log(`[DEBUG] Main: Found tags XML for ${file}:`, tagsXml);
-                const tags = tagsXml.match(/<string>(.*?)<\/string>/g)
-                  ?.map(tag => tag.replace(/<string>|<\/string>/g, '').trim())
-                  .filter(Boolean) || [];
-                
-                console.log(`[DEBUG] Main: Extracted tags for ${file}:`, tags);
-                resolve(tags);
-              } catch (parseError) {
-                console.error(`[DEBUG] Main: Error parsing tags for ${file}:`, parseError);
-                resolve([]);
-              }
-            }
-          });
-        });
-
-        const imageData = {
-          name: file,
-          path: filePath,
-          url: `local-image://${encodeURIComponent(filePath)}`,
-          tags: tags
-        };
-        console.log(`[DEBUG] Main: Final image data for ${file}:`, imageData);
-        return imageData;
+        const tagsOutput = await getImageTags(filePath);
+        if (tagsOutput) {
+          tags = JSON.parse(tagsOutput);
+        }
       } catch (error) {
-        console.error(`[DEBUG] Main: Error processing ${file}:`, error);
-        return {
-          name: file,
-          path: filePath,
-          url: `local-image://${encodeURIComponent(filePath)}`,
-          tags: []
-        };
+        console.error('Error getting tags for image:', error);
       }
-    });
 
-    const images = await Promise.all(imagePromises);
-    console.log('[DEBUG] Main: All images data:', images);
+      return {
+        name: file,
+        path: filePath,
+        url: `file://${filePath}`,
+        size: stats.size,
+        tags: tags || []
+      };
+    }));
+
     return {
       success: true,
-      images
+      images: images
     };
   } catch (error) {
-    console.error('[DEBUG] Main: Error getting images:', error);
+    console.error('Error getting images:', error);
     return {
       success: false,
       error: error.message
@@ -218,80 +195,125 @@ ipcMain.handle('directory:getImages', async (event, directoryPath) => {
   }
 });
 
+// Function to get image tags using xattr
+function getImageTags(filePath) {
+  return new Promise((resolve, reject) => {
+    const scriptPath = getPythonScriptPath();
+    console.log('Using Python script at:', scriptPath);
+    
+    const pythonProcess = spawnPythonProcess(scriptPath, [filePath]);
+    let output = '';
+
+    pythonProcess.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    pythonProcess.stderr.on('data', (data) => {
+      console.error('Python script stderr:', data.toString());
+    });
+
+    pythonProcess.on('close', (code) => {
+      if (code === 0) {
+        console.log('Python script stdout:', output);
+        try {
+          // Ensure we have valid JSON
+          JSON.parse(output.trim());
+          resolve(output.trim());
+        } catch (e) {
+          console.error('Invalid JSON from Python script:', e);
+          resolve('[]'); // Return empty tags array on invalid JSON
+        }
+      } else {
+        console.error('Error executing Python script:', code);
+        resolve('[]'); // Return empty tags array on error
+      }
+    });
+  });
+}
+
+// Get the path to the Python script
+const getPythonScriptPath = () => {
+  const resourcePath = getResourcePath();
+  return path.join(resourcePath, 'imgtagman', 'imgtag.py');
+};
+
+function spawnPythonProcess(scriptPath, args) {
+  // Create a clean environment
+  const env = {
+    ...process.env,
+    PATH: process.env.PATH,
+    PYTHONPATH: process.env.PYTHONPATH,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY
+  };
+
+  console.log('Spawning Python process with env:', {
+    PYTHONPATH: env.PYTHONPATH,
+    OPENAI_API_KEY: env.OPENAI_API_KEY ? 'set' : 'not set',
+    scriptPath,
+    args
+  });
+
+  return spawn('python3', [scriptPath, ...args], {
+    env,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+}
+
 // Handle directory processing
 ipcMain.handle('process:directory', async (event, directoryPath) => {
   console.log('Processing directory:', directoryPath);
-  
-  // Validate directory exists
-  if (!fs.existsSync(directoryPath)) {
+
+  if (!directoryPath) {
+    console.error('No directory path provided');
     return {
       success: false,
-      error: `Directory does not exist: ${directoryPath}`
+      error: 'Nenhum diretório selecionado'
     };
   }
 
   try {
-    // Get absolute path to imgtagman script
-    const imgtagmanPath = path.resolve(__dirname, '../../imgtagman/imgtag.py');
-    console.log('imgtagman path:', imgtagmanPath);
+    const scriptPath = getPythonScriptPath();
+    console.log('Using Python script at:', scriptPath);
     
     // Validate script exists
-    if (!fs.existsSync(imgtagmanPath)) {
+    if (!fs.existsSync(scriptPath)) {
+      console.error('Python script not found at:', scriptPath);
       return {
         success: false,
-        error: `imgtagman script not found at: ${imgtagmanPath}`
+        error: `imgtagman script not found at: ${scriptPath}`
       };
     }
 
-    const command = `python3 "${imgtagmanPath}" "${directoryPath}"`;
+    const command = `python3 "${scriptPath}" "${directoryPath}"`;
     console.log('Running command:', command);
 
     return new Promise((resolve, reject) => {
-      const childProcess = exec(command, {
-        env: {
-          ...process.env,
-          OPENAI_API_KEY: process.env.OPENAI_API_KEY
-        }
+      const pythonProcess = spawnPythonProcess(scriptPath, [directoryPath]);
+      let output = '';
+
+      pythonProcess.stdout.on('data', (data) => {
+        output += data.toString();
       });
 
-      let stdout = '';
-      let stderr = '';
-
-      childProcess.stdout.on('data', (data) => {
-        console.log('Python output:', data);
-        stdout += data;
+      pythonProcess.stderr.on('data', (data) => {
+        console.error('Command stderr:', data.toString());
       });
 
-      childProcess.stderr.on('data', (data) => {
-        console.error('Python error:', data);
-        stderr += data;
-      });
-
-      childProcess.on('close', (code) => {
-        console.log('Python process exited with code:', code);
+      pythonProcess.on('close', (code) => {
         if (code === 0) {
+          console.log('Command stdout:', output);
           resolve({
             success: true,
-            output: stdout,
-            details: stderr
+            output: output
           });
         } else {
+          console.error('Error executing command:', code);
+          console.error('Command stderr:', output);
           resolve({
             success: false,
-            error: `Process exited with code ${code}`,
-            output: stdout,
-            details: stderr
+            error: `Falha ao processar diretório: ${code}\nStderr: ${output}`
           });
         }
-      });
-
-      childProcess.on('error', (error) => {
-        console.error('Error executing Python script:', error);
-        resolve({
-          success: false,
-          error: error.message,
-          details: stderr
-        });
       });
     });
   } catch (error) {
@@ -311,3 +333,87 @@ ipcMain.handle('test:getImage', async () => {
     tags: ['test-tag-1', 'test-tag-2']
   };
 });
+
+// Handle processing directory
+ipcMain.handle('directory:process', async (event, directoryPath) => {
+  console.log('Processing directory:', directoryPath);
+
+  if (!directoryPath) {
+    console.error('No directory path provided');
+    return {
+      success: false,
+      error: 'Nenhum diretório selecionado'
+    };
+  }
+
+  try {
+    const scriptPath = getPythonScriptPath();
+    console.log('Using Python script at:', scriptPath);
+    
+    // Validate script exists
+    if (!fs.existsSync(scriptPath)) {
+      console.error('Python script not found at:', scriptPath);
+      return {
+        success: false,
+        error: `imgtagman script not found at: ${scriptPath}`
+      };
+    }
+
+    const command = `python3 "${scriptPath}" "${directoryPath}"`;
+    console.log('Running command:', command);
+
+    return new Promise((resolve) => {
+      const pythonProcess = spawnPythonProcess(scriptPath, [directoryPath]);
+      let output = '';
+
+      pythonProcess.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      pythonProcess.stderr.on('data', (data) => {
+        console.error('Command stderr:', data.toString());
+      });
+
+      pythonProcess.on('close', (code) => {
+        if (code === 0) {
+          console.log('Command stdout:', output);
+          resolve({
+            success: true,
+            output: output
+          });
+        } else {
+          console.error('Error executing command:', code);
+          console.error('Command stderr:', output);
+          resolve({
+            success: false,
+            error: `Falha ao processar diretório: ${code}\nStderr: ${output}`
+          });
+        }
+      });
+    });
+  } catch (error) {
+    console.error('Processing error:', error);
+    return {
+      success: false,
+      error: `Processing failed: ${error.message}`
+    };
+  }
+});
+
+const config = {
+  packagerConfig: {
+    extraResource: [
+      'imgtagman',
+      'requirements.txt',
+      'python_modules'
+    ],
+  },
+  makers: [
+    {
+      name: '@electron-forge/maker-dmg',
+      config: {
+        format: 'ULFO'
+      }
+    }
+  ]
+};

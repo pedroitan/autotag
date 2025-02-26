@@ -1,9 +1,26 @@
-import React, { useContext, useState } from 'react';
-import { Grid, Paper, Typography, Box, Button, Alert, ImageList, ImageListItem } from '@mui/material';
+import React, { useContext, useState, useMemo } from 'react';
+import { 
+  Grid, 
+  Paper, 
+  Typography, 
+  Box, 
+  Button, 
+  Alert,
+  TextField,
+  InputAdornment,
+  Chip,
+  IconButton,
+  Popover
+} from '@mui/material';
 import { styled } from '@mui/material/styles';
-import { CloudUpload as CloudUploadIcon, FolderOpenIcon, FolderShared as FolderIcon, FolderIcon as FolderSharedIcon } from '@mui/icons-material';
-import BrokenImageIcon from '@mui/icons-material/BrokenImage';
+import { 
+  CloudUpload as CloudUploadIcon, 
+  Folder as FolderIcon,
+  Search as SearchIcon,
+  FilterList as FilterIcon
+} from '@mui/icons-material';
 import { DirectoryContext } from '../../App';
+import Gallery from '../Gallery/Gallery';
 
 const StyledPaper = styled(Paper)(({ theme }) => ({
   padding: theme.spacing(3),
@@ -16,42 +33,57 @@ const StyledPaper = styled(Paper)(({ theme }) => ({
   backgroundColor: theme.palette.background.paper
 }));
 
-const ImageContainer = styled(Box)({
-  position: 'relative',
-  width: '100%',
-  height: '100%',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  backgroundColor: '#f5f5f5',
-});
-
-const StyledImage = styled('img')({
-  width: '100%',
-  height: '100%',
-  objectFit: 'cover',
-});
-
 const Dashboard = () => {
   const { selectedDirectory, setSelectedDirectory, setImages, images } = useContext(DirectoryContext);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(null);
   const [processing, setProcessing] = useState(false);
-  const [failedImages, setFailedImages] = useState(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedTags, setSelectedTags] = useState([]);
+  const [anchorEl, setAnchorEl] = useState(null);
 
-  const handleImageError = (imagePath) => {
-    setFailedImages(prev => new Set([...prev, imagePath]));
-  };
+  // Get all unique tags and their counts
+  const tagCounts = useMemo(() => {
+    const counts = {};
+    images.forEach(image => {
+      if (image.tags) {
+        image.tags.forEach(tag => {
+          counts[tag] = (counts[tag] || 0) + 1;
+        });
+      }
+    });
+    // Sort by count in descending order
+    return Object.entries(counts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 10); // Get top 10 tags
+  }, [images]);
+
+  // Filter images based on search query and selected tags
+  const filteredImages = useMemo(() => {
+    return images.filter(image => {
+      const matchesSearch = searchQuery === '' || 
+        (image.tags && image.tags.some(tag => 
+          tag.toLowerCase().includes(searchQuery.toLowerCase())
+        ));
+      
+      const matchesTags = selectedTags.length === 0 ||
+        (image.tags && selectedTags.every(tag => 
+          image.tags.includes(tag)
+        ));
+
+      return matchesSearch && matchesTags;
+    });
+  }, [images, searchQuery, selectedTags]);
 
   const handleSelectDirectory = async () => {
     try {
-      const directory = await window.electron.selectDirectory();
+      const directory = await window.electronAPI.selectDirectory();
       if (directory) {
         setSelectedDirectory(directory);
         setError(null);
         
         // Get images from the selected directory
-        const result = await window.electron.getImages(directory);
+        const result = await window.electronAPI.getImages(directory);
         if (result.success) {
           setImages(result.images);
           setError(null);
@@ -61,7 +93,7 @@ const Dashboard = () => {
         }
       }
     } catch (error) {
-      setError('Failed to select directory: ' + error.message);
+      setError('Falha ao selecionar diretório: ' + error.message);
       setSelectedDirectory(null);
       setImages([]);
     }
@@ -69,7 +101,7 @@ const Dashboard = () => {
 
   const handleProcessDirectory = async () => {
     if (!selectedDirectory) {
-      setError('Please select a directory first');
+      setError('Por favor, selecione um diretório primeiro');
       return;
     }
 
@@ -78,27 +110,50 @@ const Dashboard = () => {
     setSuccess(null);
 
     try {
-      const result = await window.electron.processDirectory(selectedDirectory);
-      console.log('Processing response:', result);
+      const result = await window.electronAPI.processDirectory(selectedDirectory);
+      console.log('Resposta do processamento:', result);
       if (result.success) {
-        setSuccess('Directory processed successfully!');
+        setSuccess('Diretório processado com sucesso!');
         setError(null);
+        
+        // Refresh images after processing
+        const imagesResult = await window.electronAPI.getImages(selectedDirectory);
+        if (imagesResult.success) {
+          setImages(imagesResult.images);
+        }
       } else {
-        setError(`Failed to process directory: ${result.error}`);
+        setError(`Falha ao processar diretório: ${result.error}`);
         setSuccess(null);
       }
     } catch (error) {
-      setError('Failed to process directory: ' + error.message);
+      setError('Falha ao processar diretório: ' + error.message);
       setSuccess(null);
     } finally {
       setProcessing(false);
     }
   };
 
+  const handleTagClick = (tag) => {
+    setSelectedTags(prev => {
+      if (prev.includes(tag)) {
+        return prev.filter(t => t !== tag);
+      }
+      return [...prev, tag];
+    });
+  };
+
+  const handleFilterClick = (event) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleFilterClose = () => {
+    setAnchorEl(null);
+  };
+
   return (
     <Box sx={{ flexGrow: 1, p: 3 }}>
       <Typography variant="h4" gutterBottom>
-        Welcome to AutoTag Drive
+        Bem-vindo ao AutoTag Drive
       </Typography>
       
       <Grid container spacing={3}>
@@ -106,10 +161,10 @@ const Dashboard = () => {
           <StyledPaper elevation={2}>
             <CloudUploadIcon sx={{ fontSize: 60, mb: 2, color: 'primary.main' }} />
             <Typography variant="h6" gutterBottom>
-              Select Local Directory
+              Selecionar Diretório Local
             </Typography>
             <Typography variant="body1" sx={{ mb: 3 }}>
-              Choose a directory containing images to process
+              Escolha um diretório contendo imagens para processar
             </Typography>
             
             <Button
@@ -117,7 +172,7 @@ const Dashboard = () => {
               onClick={handleSelectDirectory}
               sx={{ mb: 2 }}
             >
-              Choose Directory
+              Escolher Diretório
             </Button>
             
             <Button 
@@ -127,12 +182,12 @@ const Dashboard = () => {
               disabled={!selectedDirectory || processing}
               sx={{ mt: 2 }}
             >
-              {processing ? 'Processing...' : 'Process Directory'}
+              {processing ? 'Processando...' : 'Processar Diretório'}
             </Button>
             
             {selectedDirectory && (
               <Typography variant="body2" sx={{ mt: 2 }}>
-                Selected: {selectedDirectory}
+                Selecionado: {selectedDirectory}
               </Typography>
             )}
             
@@ -154,75 +209,102 @@ const Dashboard = () => {
           <StyledPaper elevation={2}>
             <FolderIcon sx={{ fontSize: 60, mb: 2, color: 'secondary.main' }} />
             <Typography variant="h6" gutterBottom>
-              Recent Directories
+              Diretórios Recentes
             </Typography>
             <Typography variant="body1">
-              Quick access to your recently processed directories
+              Acesso rápido aos seus diretórios recentemente processados
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-              No recent directories
+              Nenhum diretório recente
             </Typography>
-          </StyledPaper>
-        </Grid>
-
-        <Grid item xs={12}>
-          <StyledPaper elevation={2}>
-            <Typography variant="h6" gutterBottom>
-              Processing Status
-            </Typography>
-            {processing ? (
-              <Typography variant="body1" color="primary">
-                Processing images...
-              </Typography>
-            ) : success ? (
-              <Typography variant="body1" color="success.main">
-                {success}
-              </Typography>
-            ) : (
-              <Typography variant="body1">
-                Ready to process
-              </Typography>
-            )}
-          </StyledPaper>
-        </Grid>
-
-        <Grid item xs={12}>
-          <StyledPaper elevation={2}>
-            <Typography variant="h6" gutterBottom>
-              Images in Directory
-            </Typography>
-            {images.length > 0 ? (
-              <ImageList sx={{ width: '100%', height: 450 }} cols={3} rowHeight={200}>
-                {images.map((image) => (
-                  <ImageListItem key={image.path}>
-                    <ImageContainer>
-                      {failedImages.has(image.path) ? (
-                        <Box sx={{ textAlign: 'center' }}>
-                          <BrokenImageIcon sx={{ fontSize: 40, color: 'text.secondary' }} />
-                          <Typography variant="caption" display="block">
-                            Failed to load image
-                          </Typography>
-                        </Box>
-                      ) : (
-                        <StyledImage
-                          src={image.url}
-                          alt={image.name}
-                          loading="lazy"
-                          onError={() => handleImageError(image.path)}
-                        />
-                      )}
-                    </ImageContainer>
-                  </ImageListItem>
-                ))}
-              </ImageList>
-            ) : (
-              <Typography variant="body1">
-                No images found in the selected directory
-              </Typography>
-            )}
           </StyledPaper>
         </Grid>
       </Grid>
+
+      {/* Gallery Section */}
+      <Box sx={{ mt: 4 }}>
+        <Paper sx={{ p: 3 }}>
+          <Box sx={{ mb: 3 }}>
+            <Grid container spacing={2} alignItems="center">
+              <Grid item xs>
+                <TextField
+                  fullWidth
+                  placeholder="Buscar por tags..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  InputProps={{
+                    startAdornment: (
+                      <InputAdornment position="start">
+                        <SearchIcon />
+                      </InputAdornment>
+                    )
+                  }}
+                />
+              </Grid>
+              <Grid item>
+                <IconButton onClick={handleFilterClick}>
+                  <FilterIcon />
+                </IconButton>
+                <Popover
+                  open={Boolean(anchorEl)}
+                  anchorEl={anchorEl}
+                  onClose={handleFilterClose}
+                  anchorOrigin={{
+                    vertical: 'bottom',
+                    horizontal: 'right',
+                  }}
+                  transformOrigin={{
+                    vertical: 'top',
+                    horizontal: 'right',
+                  }}
+                >
+                  <Box sx={{ p: 2, maxWidth: 300 }}>
+                    <Typography variant="subtitle2" gutterBottom>
+                      Tags mais comuns
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                      {tagCounts.map(([tag, count]) => (
+                        <Chip
+                          key={tag}
+                          label={`${tag} (${count})`}
+                          onClick={() => handleTagClick(tag)}
+                          color={selectedTags.includes(tag) ? "primary" : "default"}
+                        />
+                      ))}
+                    </Box>
+                  </Box>
+                </Popover>
+              </Grid>
+            </Grid>
+            {selectedTags.length > 0 && (
+              <Box sx={{ mt: 2, display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                {selectedTags.map(tag => (
+                  <Chip
+                    key={tag}
+                    label={tag}
+                    onDelete={() => handleTagClick(tag)}
+                    color="primary"
+                  />
+                ))}
+              </Box>
+            )}
+          </Box>
+
+          {selectedDirectory ? (
+            filteredImages.length > 0 ? (
+              <Gallery images={filteredImages} />
+            ) : (
+              <Typography variant="body1" textAlign="center" sx={{ py: 4 }}>
+                Nenhuma imagem encontrada com os filtros selecionados
+              </Typography>
+            )
+          ) : (
+            <Typography variant="body1" textAlign="center" sx={{ py: 4 }}>
+              Selecione um diretório para visualizar as imagens
+            </Typography>
+          )}
+        </Paper>
+      </Box>
     </Box>
   );
 };

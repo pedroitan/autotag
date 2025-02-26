@@ -1,4 +1,5 @@
 import os
+import sys
 import base64
 import subprocess
 import json
@@ -6,28 +7,92 @@ import logging
 from pathlib import Path
 from openai import OpenAI
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dotenv import load_dotenv
 
 # Set up logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-# Load environment variables from frontend/.env
-frontend_env_path = Path(__file__).parent.parent / 'frontend' / '.env'
-if not frontend_env_path.exists():
-    logging.error(f".env file not found at {frontend_env_path}")
-    raise FileNotFoundError(f".env file not found at {frontend_env_path}")
+logger = logging.getLogger(__name__)
 
-load_dotenv(frontend_env_path)
+# Log environment for debugging
+logger.debug("Environment variables:")
+logger.debug("PYTHONPATH: %s", os.environ.get('PYTHONPATH'))
+logger.debug("Python path: %s", sys.path)
+logger.debug("Current directory: %s", os.getcwd())
 
-# Initialize OpenAI client
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    logging.error("OPENAI_API_KEY environment variable not found")
-    raise ValueError("OPENAI_API_KEY environment variable not found")
+def get_resource_path():
+    """Get the correct resource path whether running in development or production"""
+    if getattr(sys, 'frozen', False):
+        # Running in production
+        base_path = os.path.dirname(sys.executable)
+        resource_path = os.path.join(base_path, 'Contents', 'Resources')
+        # Add python_modules to Python path
+        python_modules = os.path.join(resource_path, 'python_modules')
+        if python_modules not in sys.path:
+            sys.path.insert(0, python_modules)
+        return resource_path
+    else:
+        # Running in development
+        return os.path.dirname(os.path.abspath(__file__))
 
+def get_api_key():
+    """Get API key from environment or file"""
+    # First try environment variable
+    api_key = os.getenv('OPENAI_API_KEY')
+    logger.debug("Received API key from env: %s", 'set' if api_key else 'not set')
+
+    # If not found in environment, try .env file
+    if not api_key:
+        # Try .env file in the resource path
+        resource_path = get_resource_path()
+        env_path = os.path.join(resource_path, '.env')
+        
+        try:
+            if os.path.exists(env_path):
+                logger.debug(f"Found .env file at {env_path}")
+                with open(env_path, 'r') as f:
+                    for line in f:
+                        if line.startswith('OPENAI_API_KEY='):
+                            api_key = line.split('=')[1].strip()
+                            logger.debug("Received API key from .env file: %s", 'set' if api_key else 'not set')
+                            break
+        except Exception as e:
+            logging.error(f"Error reading .env file: {e}")
+        
+        # Also try .env in the frontend directory
+        if not api_key:
+            frontend_env_path = os.path.join(os.path.dirname(resource_path), 'frontend', '.env')
+            try:
+                if os.path.exists(frontend_env_path):
+                    logger.debug(f"Found .env file at {frontend_env_path}")
+                    with open(frontend_env_path, 'r') as f:
+                        for line in f:
+                            if line.startswith('OPENAI_API_KEY='):
+                                api_key = line.split('=')[1].strip()
+                                logger.debug("Received API key from frontend .env file: %s", 'set' if api_key else 'not set')
+                                break
+            except Exception as e:
+                logging.error(f"Error reading frontend .env file: {e}")
+    
+    # If still not found, raise error
+    if not api_key:
+        logger.error("No API key found in environment variables or .env files")
+        logger.error("Environment variables: %s", dict(os.environ))
+        raise ValueError("No OpenAI API key found. Please set OPENAI_API_KEY environment variable or add it to .env file.")
+    
+    return api_key
+
+# Set up resource path
+resource_path = get_resource_path()
+logging.debug(f"Resource path: {resource_path}")
+logging.debug(f"Python path: {sys.path}")
+
+# Get API key
+api_key = get_api_key()
+
+# Now import OpenAI after setting up the path
 client = OpenAI(api_key=api_key)
 
 def get_file_tags(file_path):
